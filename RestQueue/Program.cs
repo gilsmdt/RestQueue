@@ -29,13 +29,18 @@ namespace RestQueue
                 RequestTimeout = TimeSpan.FromSeconds(10),
                 RetryDelay = TimeSpan.FromMilliseconds(500),
                 BatchSize = 100,
-                BatchDelay = 1000
+                BatchDelay = TimeSpan.FromSeconds(1)
             };
 
+            // event listeners
             restQueue.OnRequestError += (ex, timeout) =>
             {
                 if (ex != null && !string.IsNullOrEmpty(ex.Message))
-                    Trace.WriteLine(ex.Message); Interlocked.Increment(ref errorCount);
+                {
+                    Trace.WriteLine(ex.Message);
+                }
+
+                Interlocked.Increment(ref errorCount);
             };
 
             restQueue.OnHttpError += statusCode => Interlocked.Increment(ref httpErrorCount);
@@ -85,7 +90,7 @@ namespace RestQueue
 
                     // sample the queue again after half of the delay has taken place to see if anything approved
                     // we want to gradually react to changes
-                    Thread.Sleep(restQueue.BatchDelay / 2);
+                    Thread.Sleep((int)restQueue.BatchDelay.TotalMilliseconds / 2);
                 }
             });
 
@@ -121,27 +126,29 @@ namespace RestQueue
         /// <param name="maxBatchDelay">the maximum batch delay that we can afford</param>
         /// <param name="minSuccessRate">minimum success rate to adjustment</param>
         /// <param name="maxSuccessRate">maximum success rate to adjustment</param>
-        private static void AdjustQueue(RestQueue restQueue, int minBatchDelay, int maxBatchDelay, int minSuccessRate, int maxSuccessRate)
+        private static void AdjustQueue(RestQueue restQueue, double minBatchDelay, double maxBatchDelay, int minSuccessRate, int maxSuccessRate)
         {
+            double batchDelay = restQueue.BatchDelay.TotalMilliseconds;
+
             if (successfulCount > 0)
             {
                 var rate = GetSuccessRate();
 
                 // if we're below the success rate that we're looking for and the batch delay can be adjusted then try to increase it by 10%
-                if (rate < minSuccessRate && restQueue.BatchDelay < maxBatchDelay)
+                if (rate < minSuccessRate && batchDelay < maxBatchDelay)
                 {
                     Trace.WriteLine("success rate too low, increasing batch delay");
                     // increase delay
-                    restQueue.BatchDelay = (int)Math.Min((restQueue.BatchDelay + maxBatchDelay) / 2, maxBatchDelay);
+                    restQueue.BatchDelay = TimeSpan.FromMilliseconds(Math.Min((batchDelay + maxBatchDelay) / 2, maxBatchDelay));
                 }
 
                 // if we're above the success rate that we're looking for, we have pending requests and the batch delay can be adjusted then try to decrease it by 10%
-                if (rate > maxSuccessRate && restQueue.Pending > 0 && restQueue.BatchDelay < minBatchDelay)
+                if (rate > maxSuccessRate && restQueue.Pending > 0 && batchDelay < minBatchDelay)
                 {
                     Trace.WriteLine("success rate too high, decreasing batch delay");
 
                     // decrease delay
-                    restQueue.BatchDelay = (int)Math.Max((restQueue.BatchDelay + minBatchDelay) / 2, minBatchDelay);
+                    restQueue.BatchDelay = TimeSpan.FromMilliseconds(Math.Max((batchDelay + minBatchDelay) / 2, minBatchDelay));
                 }
             }
         }

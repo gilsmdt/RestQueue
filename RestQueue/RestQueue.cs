@@ -130,7 +130,7 @@ namespace RestQueue
         /// <summary>
         /// Indicate how many milliseconds to wait before sending the next batch of requests
         /// </summary>
-        public int BatchDelay { get; set; } = DEFAULT_BATCH_DELAY;
+        public TimeSpan BatchDelay { get; set; } = DEFAULT_BATCH_DELAY;
 
         /// <summary>
         /// holds a request queue to a REST API with JSON format
