@@ -1,0 +1,25 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title></title>
+    <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+</head>
+<body>
+    <script>
+        $.ajax({
+            type: 'POST',
+            url: '/api/Logs',
+            dataType: 'json',
+            contentType: 'application/json; charset=utf-8',
+            data: JSON.stringify({
+                message: 'bla', timestamp: Date.now()
+            }),
+            success: function (result) {
+                console.log('Data received: ');
+                console.log(result);
+            }
+        });
+    </script>
+</body>
+</html>
