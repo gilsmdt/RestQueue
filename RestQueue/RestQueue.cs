@@ -83,6 +83,11 @@ namespace RestQueue
         private int pending = 0;
 
         /// <summary>
+        /// will be used to create the StringContent and identified the content type
+        /// </summary>
+        private string mediaType;
+
+        /// <summary>
         /// returns the number of requests in the queue waiting for a response
         /// </summary>
         public int Pending { get { return pending; } }
@@ -142,7 +147,9 @@ namespace RestQueue
         /// </summary>
         /// <param name="baseAddress">the base address that will be prefixed for all requests, should end with /</param>
         /// <param name="handler">optional - if you have to do some pre / post processing</param>        
-        public RestQueue(Uri baseAddress, HttpMessageHandler handler = null)
+        /// <param name="mediaType">optional - specify which media type will be used for identifying the content sent, default is "application/json"</param>                
+        /// <param name="defaultRequestHeaders ">optional - specify which headers will be sent with every request, default is "Accept", "application/json"</param>                
+        public RestQueue(Uri baseAddress, HttpMessageHandler handler = null, string mediaType = "application/json", Dictionary<string, string> defaultRequestHeaders = null)
         {
             if (!baseAddress.ToString().EndsWith("/"))
                 throw new Exception("baseAddress must end with /\r\nplease read the following link for more details\r\nhttps://stackoverflow.com/questions/23438416/why-is-httpclient-baseaddress-not-working");
@@ -152,7 +159,19 @@ namespace RestQueue
             httpClient = handler == null ? new HttpClient() : new HttpClient(handler, true);
             httpClient.BaseAddress = baseAddress;
             httpClient.Timeout = TimeSpan.FromSeconds(DEFAULT_TIMEOUT);
-            httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+
+            if (defaultRequestHeaders == null)
+            {
+                defaultRequestHeaders = new Dictionary<string, string>()
+                {
+                    { "Accept", "application/json" }
+                };
+            }
+
+            foreach (var header in defaultRequestHeaders)
+            {
+                httpClient.DefaultRequestHeaders.Add(header.Key, header.Value);
+            }
 
             // setup the HTTP client to renew connections after one minute to be able to handle DNS changes
             ServicePointManager.FindServicePoint(baseAddress).ConnectionLeaseTimeout = (int)TimeSpan.FromMinutes(1).TotalMilliseconds;
@@ -201,7 +220,7 @@ namespace RestQueue
 
             request = new HttpRequestMessage()
             {
-                Content = new StringContent(message, Encoding.UTF8, "application/json"),
+                Content = new StringContent(message, Encoding.UTF8, mediaType),
                 RequestUri = new Uri(httpClient.BaseAddress.OriginalString + uri),
                 Method = message == null ? HttpMethod.Get : HttpMethod.Post
             };

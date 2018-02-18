@@ -8,7 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace RestQueue
+namespace CLI
 {
     class Program
     {
@@ -24,7 +24,7 @@ namespace RestQueue
             // we'll give a head start to the server so it'll be ready before the first request
             Thread.Sleep(2000);
 
-            var restQueue = new RestQueue(new Uri("http://localhost:52159/api/"), handler)
+            var restQueue = new RestQueue.RestQueue(new Uri("http://localhost:52159/api/"), handler)
             {
                 RequestTimeout = TimeSpan.FromSeconds(10),
                 RetryDelay = TimeSpan.FromMilliseconds(500),
@@ -126,7 +126,7 @@ namespace RestQueue
         /// <param name="maxBatchDelay">the maximum batch delay that we can afford</param>
         /// <param name="minSuccessRate">minimum success rate to adjustment</param>
         /// <param name="maxSuccessRate">maximum success rate to adjustment</param>
-        private static void AdjustQueue(RestQueue restQueue, double minBatchDelay, double maxBatchDelay, int minSuccessRate, int maxSuccessRate)
+        private static void AdjustQueue(RestQueue.RestQueue restQueue, double minBatchDelay, double maxBatchDelay, int minSuccessRate, int maxSuccessRate)
         {
             double batchDelay = restQueue.BatchDelay.TotalMilliseconds;
 
