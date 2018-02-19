@@ -20,6 +20,7 @@ namespace RestQueue
         private const double DEFAULT_RETRY_DELAY = 3;
         private const int DEFAULT_BATCH_SIZE = 100;
         private const int DEFAULT_BATCH_DELAY = 100;
+        private const int DEFAULT_MAX_ATTEMPTS = 3;
 
         /// <summary>
         /// sync object to limit the size of the queue
@@ -55,7 +56,7 @@ namespace RestQueue
         /// <summary>
         /// keeps all requests waiting to be sent
         /// </summary>
-        private ConcurrentQueue<HttpRequestMessage> requests = new ConcurrentQueue<HttpRequestMessage>();
+        private ConcurrentQueue<RestQueueRequest> requests = new ConcurrentQueue<RestQueueRequest>();
 
         /// <summary>
         /// HTTP client that will be used to process requests
@@ -105,7 +106,17 @@ namespace RestQueue
         /// <summary>
         /// on failures determine how much time to wait before retry, default is 3s
         /// </summary>
-        public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(DEFAULT_RETRY_DELAY);
+        public TimeSpan FixedRetryDelay { get; set; } = TimeSpan.FromSeconds(DEFAULT_RETRY_DELAY);
+
+        /// <summary>
+        /// defines how many attempts a request should have, default is 3
+        /// </summary>
+        public int MaxAttempts { get; set; } = DEFAULT_MAX_ATTEMPTS;
+
+        /// <summary>
+        /// determine which strategy to choose between retries
+        /// </summary>
+        public QueueRetryStrategy RetryStrategy { get; set; } = QueueRetryStrategy.ExponentialBackoff;
 
         /// <summary>
         /// if the queue is empty indicate how much time to wait before checking for a new request, default is 100ms
@@ -137,6 +148,8 @@ namespace RestQueue
         /// </summary>
         public TimeSpan BatchDelay { get; set; } = TimeSpan.FromMilliseconds(DEFAULT_BATCH_DELAY);
 
+        private Func<int, TimeSpan> CalculateExponentialBackoff = (attempts) => TimeSpan.FromSeconds(Math.Pow(2, attempts));
+
         /// <summary>
         /// holds a request queue to a REST API with JSON format
         /// the purpose of this queue is to handle async requests where the response content is not important, for example: logging, auditing, ...
@@ -154,6 +167,7 @@ namespace RestQueue
             if (!baseAddress.ToString().EndsWith("/"))
                 throw new Exception("baseAddress must end with /\r\nplease read the following link for more details\r\nhttps://stackoverflow.com/questions/23438416/why-is-httpclient-baseaddress-not-working");
 
+            this.mediaType = mediaType;
             Formatter = JsonFormatter;
 
             httpClient = handler == null ? new HttpClient() : new HttpClient(handler, true);
@@ -216,13 +230,12 @@ namespace RestQueue
         /// <param name="message">the JSON message to send, if null is passed HTTP GET will be used</param>
         public void Enqueue(string uri, string message = null)
         {
-            HttpRequestMessage request;
-
-            request = new HttpRequestMessage()
+            RestQueueRequest request = new RestQueueRequest()
             {
-                Content = new StringContent(message, Encoding.UTF8, mediaType),
+                Message = message,
                 RequestUri = new Uri(httpClient.BaseAddress.OriginalString + uri),
-                Method = message == null ? HttpMethod.Get : HttpMethod.Post
+                Method = message == null ? HttpMethod.Get : HttpMethod.Post,
+                Attempts = 0
             };
 
             requests.Enqueue(request);
@@ -238,26 +251,21 @@ namespace RestQueue
         }
 
         /// <summary>
-        /// clones the HttpRequestMessage as it's being disposed once a request is completed
-        /// the new cloned object will be enqueued after the retryDelay configuration
+        /// decides if and when to retry sending the request
         /// </summary>
-        /// <param name="request"></param>
-        private async void CloneAndEnqueue(HttpRequestMessage request)
+        /// <param name="request">the request object</param>
+        private async void Retry(RestQueueRequest request)
         {
-            byte[] data = request.Content.ReadAsByteArrayAsync().Result;
+            request.Attempts++;
 
-            var clonedRequest = new HttpRequestMessage()
+            if (request.Attempts < MaxAttempts)
             {
-                Content = new ByteArrayContent(data),
-                Method = request.Method,
-                RequestUri = request.RequestUri
-            };
+                // add delay before the retry
+                await Task.Delay(RetryStrategy == QueueRetryStrategy.ExponentialBackoff ? CalculateExponentialBackoff(request.Attempts) : FixedRetryDelay);
 
-            // add delay before te retry
-            await Task.Delay(RetryDelay);
-
-            // add the cloned object back into the queue
-            requests.Enqueue(clonedRequest);
+                // re-add the request into the queue
+                requests.Enqueue(request);
+            }
         }
 
         /// <summary>
@@ -266,7 +274,8 @@ namespace RestQueue
         /// </summary>
         private void Process()
         {
-            HttpRequestMessage request;
+            RestQueueRequest request;
+            HttpRequestMessage httpRequest;
 
             while (processing)
             {
@@ -281,7 +290,14 @@ namespace RestQueue
                         Interlocked.Increment(ref pending);
                         Interlocked.Increment(ref batchIndex);
 
-                        httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                        httpRequest = new HttpRequestMessage()
+                        {
+                            Content = new StringContent(request.Message, Encoding.UTF8, mediaType),
+                            Method = request.Method,
+                            RequestUri = request.RequestUri
+                        };
+
+                        httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead)
                             .ContinueWith(HandleResponse, request);
 
                         // we've reached the max number of requests in the batch, we'll start a new batch after the delay
@@ -321,21 +337,22 @@ namespace RestQueue
         /// <param name="state"></param>
         private void HandleResponse(Task<HttpResponseMessage> task, object state)
         {
+            Interlocked.Decrement(ref pending);
+
             if (!task.IsCompleted || task.Status != TaskStatus.RanToCompletion)
             {
-                CloneAndEnqueue(state as HttpRequestMessage);
+                Retry(state as RestQueueRequest);
                 OnRequestError?.Invoke(task.Exception, task.Status == TaskStatus.Canceled);
             }
             else if (task.Result.StatusCode != HttpStatusCode.OK &&
                     task.Result.StatusCode != HttpStatusCode.Created &&
                     task.Result.StatusCode != HttpStatusCode.Accepted)
             {
-                CloneAndEnqueue(state as HttpRequestMessage);
+                Retry(state as RestQueueRequest);
                 OnHttpError?.Invoke(task.Result.StatusCode);
             }
             else
             {
-                Interlocked.Decrement(ref pending);
                 OnRequestSent?.Invoke();
             }
         }

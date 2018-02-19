@@ -27,7 +27,7 @@ namespace CLI
             var restQueue = new RestQueue.RestQueue(new Uri("http://localhost:52159/api/"), handler)
             {
                 RequestTimeout = TimeSpan.FromSeconds(10),
-                RetryDelay = TimeSpan.FromMilliseconds(500),
+                FixedRetryDelay = TimeSpan.FromMilliseconds(500),
                 BatchSize = 100,
                 BatchDelay = TimeSpan.FromSeconds(1)
             };

@@ -50,6 +50,8 @@
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="RestQueue.cs" />
+    <Compile Include="RestQueueRequest.cs" />
+    <Compile Include="QueueRetryStrategy.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

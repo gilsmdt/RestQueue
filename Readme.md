@@ -6,6 +6,7 @@ By using **RestQueue** to process your requests you get
 * Limited resources usage by queuing messages and reducing the number of connections needed
 * Built-in retry mechanism
 * Ability to add queue adjustment strategy to react for difference load and network conditions (see example below)
+* Adjustable retry mechanism - [Exponential Backoff](https://en.wikipedia.org/wiki/Exponential_backoff) or fixed time
 
 ## Example usage ##
 
