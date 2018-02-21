@@ -16,11 +16,17 @@ namespace RestQueue
     {
         private const int DEFAULT_MAX_QUEUE_SIZE = 100000;
         private const int DEFAULT_EMPTY_QUEUE_DELAY = 100;
-        private const double DEFAULT_TIMEOUT = 60;
-        private const double DEFAULT_RETRY_DELAY = 3;
+        private const double DEFAULT_TIMEOUT = 60000;
+        private const int DEFAULT_RETRY_DELAY = 3000;
         private const int DEFAULT_BATCH_SIZE = 100;
         private const int DEFAULT_BATCH_DELAY = 100;
         private const int DEFAULT_MAX_ATTEMPTS = 3;
+
+
+        /// <summary>
+        /// formats an object with JSON serializer
+        /// </summary>
+        private static readonly ContentFormatter JsonFormatter = obj => JsonConvert.SerializeObject(obj);
 
         /// <summary>
         /// sync object to limit the size of the queue
@@ -106,7 +112,7 @@ namespace RestQueue
         /// <summary>
         /// on failures determine how much time to wait before retry, default is 3s
         /// </summary>
-        public TimeSpan FixedRetryDelay { get; set; } = TimeSpan.FromSeconds(DEFAULT_RETRY_DELAY);
+        public int FixedRetryDelay { get; set; } = DEFAULT_RETRY_DELAY;
 
         /// <summary>
         /// defines how many attempts a request should have, default is 3
@@ -131,12 +137,7 @@ namespace RestQueue
         /// <summary>
         /// holds the formatter for objects
         /// </summary>
-        public ContentFormatter Formatter { get; set; }
-
-        /// <summary>
-        /// formats an object with JSON serializer
-        /// </summary>
-        private ContentFormatter JsonFormatter = obj => JsonConvert.SerializeObject(obj);
+        public ContentFormatter Formatter { get; set; } = JsonFormatter;
 
         /// <summary>
         /// Indicate how many requests to send before taking a break
@@ -147,8 +148,6 @@ namespace RestQueue
         /// Indicate how many milliseconds to wait before sending the next batch of requests
         /// </summary>
         public TimeSpan BatchDelay { get; set; } = TimeSpan.FromMilliseconds(DEFAULT_BATCH_DELAY);
-
-        private Func<int, TimeSpan> CalculateExponentialBackoff = (attempts) => TimeSpan.FromSeconds(Math.Pow(2, attempts));
 
         /// <summary>
         /// holds a request queue to a REST API with JSON format
@@ -168,11 +167,10 @@ namespace RestQueue
                 throw new Exception("baseAddress must end with /\r\nplease read the following link for more details\r\nhttps://stackoverflow.com/questions/23438416/why-is-httpclient-baseaddress-not-working");
 
             this.mediaType = mediaType;
-            Formatter = JsonFormatter;
 
             httpClient = handler == null ? new HttpClient() : new HttpClient(handler, true);
             httpClient.BaseAddress = baseAddress;
-            httpClient.Timeout = TimeSpan.FromSeconds(DEFAULT_TIMEOUT);
+            httpClient.Timeout = TimeSpan.FromMilliseconds(DEFAULT_TIMEOUT);
 
             if (defaultRequestHeaders == null)
             {
@@ -211,6 +209,15 @@ namespace RestQueue
         /// <summary>
         /// Enqueue an object to be sent, the object will be serialized to JSON before sending
         /// </summary>
+        /// <param name="obj">the object to send, if object is null the request will be ignore</param>
+        public void Enqueue(object obj)
+        {
+            Enqueue("", obj);
+        }
+
+        /// <summary>
+        /// Enqueue an object to be sent, the object will be serialized to JSON before sending
+        /// </summary>
         /// <param name="uri">Uri to be used, shouldn't start with /</param>
         /// <param name="obj">the object to send, if object is null the request will be ignore</param>
         public void Enqueue(string uri, object obj)
@@ -224,7 +231,16 @@ namespace RestQueue
         }
 
         /// <summary>
-        /// Enqueue an object to be sent
+        /// Enqueue a message to be sent
+        /// </summary>
+        /// <param name="message">the JSON message to send, if null is passed HTTP GET will be used</param>
+        public void Enqueue(string message = null)
+        {
+            Enqueue("", message);
+        }
+
+        /// <summary>
+        /// Enqueue a message to be sent
         /// </summary>
         /// <param name="uri">Uri to be used, shouldn't start with / and will be prefixed with the base address</param>
         /// <param name="message">the JSON message to send, if null is passed HTTP GET will be used</param>
@@ -260,8 +276,15 @@ namespace RestQueue
 
             if (request.Attempts < MaxAttempts)
             {
+                int delay = FixedRetryDelay;
+
+                if (RetryStrategy == QueueRetryStrategy.ExponentialBackoff)
+                {
+                    delay = (int)Math.Pow(2, request.Attempts) * 1000;
+                }
+
                 // add delay before the retry
-                await Task.Delay(RetryStrategy == QueueRetryStrategy.ExponentialBackoff ? CalculateExponentialBackoff(request.Attempts) : FixedRetryDelay);
+                await Task.Delay(delay);
 
                 // re-add the request into the queue
                 requests.Enqueue(request);
@@ -309,10 +332,11 @@ namespace RestQueue
                     }
                     else
                     {
-                        // zero the batch counter as we've reached the end of the queue
+                        //we've reached the end of the queue
+                        // zero the batch counter
                         Interlocked.Exchange(ref batchIndex, 0);
 
-                        // queue is empty, we'll suspend our next check
+                        // suspend processing to avoid redundant CPU usage
                         Thread.Sleep(EmptyQueueDelay);
                     }
                 }
@@ -333,8 +357,8 @@ namespace RestQueue
         /// <summary>
         /// in case of a failure will enqueue the failed request again
         /// </summary>
-        /// <param name="task"></param>
-        /// <param name="state"></param>
+        /// <param name="task">the task that handled the request</param>
+        /// <param name="state">the original request object</param>
         private void HandleResponse(Task<HttpResponseMessage> task, object state)
         {
             Interlocked.Decrement(ref pending);
@@ -344,9 +368,7 @@ namespace RestQueue
                 Retry(state as RestQueueRequest);
                 OnRequestError?.Invoke(task.Exception, task.Status == TaskStatus.Canceled);
             }
-            else if (task.Result.StatusCode != HttpStatusCode.OK &&
-                    task.Result.StatusCode != HttpStatusCode.Created &&
-                    task.Result.StatusCode != HttpStatusCode.Accepted)
+            else if ((int)task.Result.StatusCode >= 300)
             {
                 Retry(state as RestQueueRequest);
                 OnHttpError?.Invoke(task.Result.StatusCode);
