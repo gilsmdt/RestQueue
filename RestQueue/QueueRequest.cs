@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace RestQueue
 {
-    public class RestQueueRequest
+    public class QueueRequest
     {
         public string Message { get; set; }
         public Uri RequestUri { get; set; }

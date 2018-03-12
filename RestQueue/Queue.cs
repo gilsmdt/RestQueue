@@ -12,7 +12,7 @@ using Newtonsoft.Json;
 
 namespace RestQueue
 {
-    public class RestQueue : IDisposable
+    public class Queue : IDisposable
     {
         private const int DEFAULT_MAX_QUEUE_SIZE = 100000;
         private const int DEFAULT_EMPTY_QUEUE_DELAY = 100;
@@ -62,7 +62,7 @@ namespace RestQueue
         /// <summary>
         /// keeps all requests waiting to be sent
         /// </summary>
-        private ConcurrentQueue<RestQueueRequest> requests = new ConcurrentQueue<RestQueueRequest>();
+        private ConcurrentQueue<QueueRequest> requests = new ConcurrentQueue<QueueRequest>();
 
         /// <summary>
         /// HTTP client that will be used to process requests
@@ -112,7 +112,7 @@ namespace RestQueue
         /// <summary>
         /// on failures determine how much time to wait before retry, default is 3s
         /// </summary>
-        public int FixedRetryDelay { get; set; } = DEFAULT_RETRY_DELAY;
+        public TimeSpan FixedRetryDelay { get; set; } = TimeSpan.FromSeconds(DEFAULT_RETRY_DELAY);
 
         /// <summary>
         /// defines how many attempts a request should have, default is 3
@@ -161,7 +161,7 @@ namespace RestQueue
         /// <param name="handler">optional - if you have to do some pre / post processing</param>        
         /// <param name="mediaType">optional - specify which media type will be used for identifying the content sent, default is "application/json"</param>                
         /// <param name="defaultRequestHeaders ">optional - specify which headers will be sent with every request, default is "Accept", "application/json"</param>                
-        public RestQueue(Uri baseAddress, HttpMessageHandler handler = null, string mediaType = "application/json", Dictionary<string, string> defaultRequestHeaders = null)
+        public Queue(Uri baseAddress, HttpMessageHandler handler = null, string mediaType = "application/json", Dictionary<string, string> defaultRequestHeaders = null)
         {
             if (!baseAddress.ToString().EndsWith("/"))
                 throw new Exception("baseAddress must end with /\r\nplease read the following link for more details\r\nhttps://stackoverflow.com/questions/23438416/why-is-httpclient-baseaddress-not-working");
@@ -246,7 +246,7 @@ namespace RestQueue
         /// <param name="message">the JSON message to send, if null is passed HTTP GET will be used</param>
         public void Enqueue(string uri, string message = null)
         {
-            RestQueueRequest request = new RestQueueRequest()
+            QueueRequest request = new QueueRequest()
             {
                 Message = message,
                 RequestUri = new Uri(httpClient.BaseAddress.OriginalString + uri),
@@ -270,13 +270,13 @@ namespace RestQueue
         /// decides if and when to retry sending the request
         /// </summary>
         /// <param name="request">the request object</param>
-        private async void Retry(RestQueueRequest request)
+        private async void Retry(QueueRequest request)
         {
             request.Attempts++;
 
             if (request.Attempts < MaxAttempts)
             {
-                int delay = FixedRetryDelay;
+                int delay = (int)FixedRetryDelay.TotalMilliseconds;
 
                 if (RetryStrategy == QueueRetryStrategy.ExponentialBackoff)
                 {
@@ -297,7 +297,7 @@ namespace RestQueue
         /// </summary>
         private void Process()
         {
-            RestQueueRequest request;
+            QueueRequest request;
             HttpRequestMessage httpRequest;
 
             while (processing)
@@ -365,12 +365,12 @@ namespace RestQueue
 
             if (!task.IsCompleted || task.Status != TaskStatus.RanToCompletion)
             {
-                Retry(state as RestQueueRequest);
+                Retry(state as QueueRequest);
                 OnRequestError?.Invoke(task.Exception, task.Status == TaskStatus.Canceled);
             }
             else if ((int)task.Result.StatusCode >= 300)
             {
-                Retry(state as RestQueueRequest);
+                Retry(state as QueueRequest);
                 OnHttpError?.Invoke(task.Result.StatusCode);
             }
             else
